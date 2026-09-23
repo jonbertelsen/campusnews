@@ -3,6 +3,7 @@ package app;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.Connection;
 
 import java.io.IOException;
 import java.time.LocalDate;
@@ -17,6 +18,13 @@ import java.util.regex.Pattern;
 public class CafsMenuScraper {
     static final String BASE_URL = "https://cafs.dk";
     static final String MENU_URL = BASE_URL + "/Home/MenuOversigt";
+    private static final String PROXY_HOST = "193.181.218.140";
+    private static final int PROXY_PORT = 3128;
+
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (X11; Linux x86_64) " +
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/153.0.0.0 Safari/537.36";
 
     private static final Pattern WEEK_HEADING_PATTERN = Pattern.compile("Menu uge\\s+(\\d+)\\s+-\\s+(\\d+)");
     private static final Pattern DATE_TEXT_PATTERN = Pattern.compile("([\\p{L}æøåÆØÅ]+)\\s+(\\d{1,2})\\.\\s+([\\p{L}æøåÆØÅ]+)\\.?");
@@ -38,11 +46,50 @@ public class CafsMenuScraper {
     );
 
     public WeeklyMenu fetchMenu() throws IOException {
-        Document document = Jsoup.connect(MENU_URL)
-                .userAgent("Mozilla/5.0 (compatible; CampusNewsBot/1.0)")
+        /*
+         * Det første kald opretter ASP.NET-sessionen.
+         * CAFS kan returnere 403, men sender stadig session-cookien.
+         */
+        Connection.Response sessionResponse = Jsoup.connect(BASE_URL + "/")
+                .proxy(PROXY_HOST, PROXY_PORT)
+                .userAgent(USER_AGENT)
                 .timeout(10_000)
-                .get();
+                .followRedirects(true)
+                .ignoreHttpErrors(true)
+                .method(Connection.Method.GET)
+                .execute();
 
+        Map<String, String> cookies = sessionResponse.cookies();
+
+        if (!cookies.containsKey("ASP.NET_SessionId")) {
+            throw new IOException(
+                    "CAFS oprettede ikke en ASP.NET-session. HTTP-status: "
+                            + sessionResponse.statusCode()
+            );
+        }
+
+        /*
+         * Menusiden hentes gennem samme proxy og med den oprettede session.
+         */
+        Connection.Response menuResponse = Jsoup.connect(MENU_URL)
+                .proxy(PROXY_HOST, PROXY_PORT)
+                .userAgent(USER_AGENT)
+                .referrer(BASE_URL + "/")
+                .cookies(cookies)
+                .timeout(10_000)
+                .followRedirects(true)
+                .ignoreHttpErrors(true)
+                .method(Connection.Method.GET)
+                .execute();
+
+        if (menuResponse.statusCode() != 200) {
+            throw new IOException(
+                    "Kunne ikke hente menuen fra CAFS. HTTP-status: "
+                            + menuResponse.statusCode()
+            );
+        }
+
+        Document document = menuResponse.parse();
         return parseMenu(document.html());
     }
 
