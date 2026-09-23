@@ -3,6 +3,8 @@ package app;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.Connection;
+import java.util.Map;
 
 import java.io.IOException;
 import java.time.LocalDate;
@@ -18,6 +20,14 @@ public class CafsActivityScraper {
     static final String BASE_URL = "https://cafs.dk";
     static final String ACTIVITIES_URL = BASE_URL + "/Home/Aktiviteter";
 
+    private static final String PROXY_HOST = "193.181.218.140";
+    private static final int PROXY_PORT = 3128;
+
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (X11; Linux x86_64) " +
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/153.0.0.0 Safari/537.36";
+
     private static final DateTimeFormatter SOURCE_DATE_TIME =
             DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm");
     private static final DateTimeFormatter SOURCE_TIME =
@@ -26,10 +36,52 @@ public class CafsActivityScraper {
             DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 
     public List<Activity> fetchActivities() throws IOException {
-        Document document = Jsoup.connect(ACTIVITIES_URL)
-                .userAgent("Mozilla/5.0 (compatible; CampusNewsBot/1.0)")
+        /*
+         * Første request opretter en ASP.NET-session.
+         * CAFS returnerer muligvis 403, men sender alligevel
+         * ASP.NET_SessionId som cookie.
+         */
+        Connection.Response sessionResponse = Jsoup.connect(BASE_URL + "/")
+                .proxy(PROXY_HOST, PROXY_PORT)
+                .userAgent(USER_AGENT)
                 .timeout(10_000)
-                .get();
+                .followRedirects(true)
+                .ignoreHttpErrors(true)
+                .method(Connection.Method.GET)
+                .execute();
+
+        Map<String, String> cookies = sessionResponse.cookies();
+
+        if (!cookies.containsKey("ASP.NET_SessionId")) {
+            throw new IOException(
+                    "CAFS oprettede ikke en ASP.NET-session. HTTP-status: "
+                            + sessionResponse.statusCode()
+            );
+        }
+
+        /*
+         * Andet request genbruger session-cookien og sender forsiden
+         * som Referer. Det svarer til det fungerende curl-forløb.
+         */
+        Connection.Response activitiesResponse = Jsoup.connect(ACTIVITIES_URL)
+                .proxy(PROXY_HOST, PROXY_PORT)
+                .userAgent(USER_AGENT)
+                .referrer(BASE_URL + "/")
+                .cookies(cookies)
+                .timeout(10_000)
+                .followRedirects(true)
+                .ignoreHttpErrors(true)
+                .method(Connection.Method.GET)
+                .execute();
+
+        if (activitiesResponse.statusCode() != 200) {
+            throw new IOException(
+                    "Kunne ikke hente aktiviteter fra CAFS. HTTP-status: "
+                            + activitiesResponse.statusCode()
+            );
+        }
+
+        Document document = activitiesResponse.parse();
 
         return parseActivities(document.body().html());
     }
