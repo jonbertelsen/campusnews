@@ -13,7 +13,7 @@ API'et ikke henter samme side igen for hvert eneste request.
 
 ## Teknologier
 
-- Java 25
+- Java 25 - Temurin
 - Maven
 - Javalin 7.2.2
 - JSoup 1.23.2
